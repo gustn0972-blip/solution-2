@@ -8,6 +8,28 @@ interface Message {
   isLoading?: boolean
 }
 
+interface Difficulty {
+  label: string
+  desc: string
+}
+
+const UNITS = [
+  '경우의 수',
+  '순열과 조합',
+  '이항정리',
+  '확률의 뜻과 기본 성질',
+  '조건부확률과 독립',
+  '이산확률변수',
+  '연속확률변수와 정규분포',
+  '통계적 추정',
+]
+
+const DIFFICULTIES: Difficulty[] = [
+  { label: '2점', desc: '기본' },
+  { label: '3점', desc: '표준' },
+  { label: '4점', desc: '심화' },
+]
+
 type AllowedMimeType = 'image/jpeg' | 'image/png' | 'image/webp'
 const ALLOWED_TYPES: AllowedMimeType[] = ['image/jpeg', 'image/png', 'image/webp']
 
@@ -29,6 +51,8 @@ export default function Solver() {
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [selectedUnit, setSelectedUnit] = useState<string | null>(null)
+  const [showUnitSelector, setShowUnitSelector] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -56,20 +80,14 @@ export default function Solver() {
     setImagePreviewUrl(null)
   }
 
-  async function handleSubmit() {
-    const text = input.trim()
-    if (!text && !imageFile) return
+  async function submitMessage(
+    text: string,
+    imageBase64?: string,
+    mediaType?: string,
+    displayImageUrl?: string,
+  ) {
+    if (!text && !imageBase64) return
     if (isLoading) return
-
-    let imageBase64: string | undefined
-    let mediaType: string | undefined
-    let displayImageUrl: string | undefined
-
-    if (imageFile) {
-      imageBase64 = await fileToBase64(imageFile)
-      mediaType = imageFile.type
-      displayImageUrl = `data:${imageFile.type};base64,${imageBase64}`
-    }
 
     const userMessage: Message = {
       role: 'user',
@@ -82,8 +100,7 @@ export default function Solver() {
       userMessage,
       { role: 'assistant', text: '', isLoading: true },
     ])
-    setInput('')
-    handleImageRemove()
+    setShowUnitSelector(false)
     setIsLoading(true)
 
     try {
@@ -109,12 +126,90 @@ export default function Solver() {
     }
   }
 
+  async function handleSubmit() {
+    const text = input.trim()
+    if (!text && !imageFile) return
+    if (isLoading) return
+
+    let imageBase64: string | undefined
+    let mediaType: string | undefined
+    let displayImageUrl: string | undefined
+
+    if (imageFile) {
+      imageBase64 = await fileToBase64(imageFile)
+      mediaType = imageFile.type
+      displayImageUrl = `data:${imageFile.type};base64,${imageBase64}`
+    }
+
+    setInput('')
+    handleImageRemove()
+    await submitMessage(text, imageBase64, mediaType, displayImageUrl)
+  }
+
+  async function handleDifficultySelect(unit: string, d: Difficulty) {
+    setSelectedUnit(null)
+    const prompt = `[${unit}] 단원의 수능 ${d.label}(${d.desc}) 수준 예제 문제를 새로 하나 직접 만들고, 바로 이어서 손풀이 스타일로 풀어줘. 문제를 먼저 제시한 뒤 풀이를 보여줘.`
+    await submitMessage(prompt)
+  }
+
+  function handleToggleUnitSelector() {
+    setShowUnitSelector(prev => !prev)
+    setSelectedUnit(null)
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void handleSubmit()
     }
   }
+
+  const unitSelectorContent = (
+    <div className="unit-selector">
+      {selectedUnit === null ? (
+        <>
+          <p className="unit-selector-label">단원 선택</p>
+          <div className="unit-grid">
+            {UNITS.map(unit => (
+              <button
+                key={unit}
+                className="unit-btn"
+                onClick={() => setSelectedUnit(unit)}
+                disabled={isLoading}
+              >
+                {unit}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="difficulty-header">
+            <button
+              className="back-btn"
+              onClick={() => setSelectedUnit(null)}
+            >
+              ← 단원
+            </button>
+            <span className="selected-unit-label">{selectedUnit}</span>
+          </div>
+          <div className="difficulty-row">
+            {DIFFICULTIES.map(d => (
+              <button
+                key={d.label}
+                className={`difficulty-btn score-${d.label[0]}`}
+                onClick={() => void handleDifficultySelect(selectedUnit, d)}
+                disabled={isLoading}
+              >
+                <span className="difficulty-score">{d.label}</span>
+                <span className="difficulty-desc">{d.desc}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
 
   return (
     <div className="solver">
@@ -127,9 +222,10 @@ export default function Solver() {
         {messages.length === 0 && (
           <div className="empty-state">
             <p className="empty-title">어떤 문제를 풀어드릴까요?</p>
-            <p className="empty-example">
-              예: P(A∪B) = 3/4, P(B) = 1/3일 때 P(A) 구하기 (A, B 배반)
+            <p className="empty-subtitle">
+              단원을 선택하거나 문제를 직접 입력하세요
             </p>
+            {unitSelectorContent}
           </div>
         )}
         {messages.map((msg, i) => (
@@ -159,6 +255,10 @@ export default function Solver() {
         <div ref={messagesEndRef} />
       </div>
 
+      {messages.length > 0 && showUnitSelector && (
+        <div className="unit-selector-panel">{unitSelectorContent}</div>
+      )}
+
       <div className="input-area">
         {imagePreviewUrl && (
           <div className="image-preview">
@@ -182,6 +282,15 @@ export default function Solver() {
             disabled={isLoading}
           />
           <div className="input-actions">
+            <button
+              className={`unit-toggle-btn${showUnitSelector ? ' active' : ''}`}
+              onClick={handleToggleUnitSelector}
+              disabled={isLoading}
+              title="단원별 예제"
+              aria-label="단원별 예제"
+            >
+              📚
+            </button>
             <button
               className="image-upload-btn"
               onClick={() => fileInputRef.current?.click()}
