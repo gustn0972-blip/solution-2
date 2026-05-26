@@ -6,6 +6,7 @@ interface Message {
   text: string
   imageUrl?: string
   isLoading?: boolean
+  isProblem?: boolean
 }
 
 interface Difficulty {
@@ -53,6 +54,7 @@ export default function Solver() {
   const [isLoading, setIsLoading] = useState(false)
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null)
   const [showUnitSelector, setShowUnitSelector] = useState(false)
+  const [pendingProblem, setPendingProblem] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -80,18 +82,21 @@ export default function Solver() {
     setImagePreviewUrl(null)
   }
 
+  // apiText: API로 전송되는 실제 텍스트
+  // displayText: 채팅 버블에 표시할 텍스트 (생략 시 apiText 사용)
   async function submitMessage(
-    text: string,
+    apiText: string,
     imageBase64?: string,
     mediaType?: string,
     displayImageUrl?: string,
+    displayText?: string,
   ) {
-    if (!text && !imageBase64) return
+    if (!apiText && !imageBase64) return
     if (isLoading) return
 
     const userMessage: Message = {
       role: 'user',
-      text,
+      text: displayText ?? apiText,
       imageUrl: displayImageUrl,
     }
 
@@ -104,7 +109,7 @@ export default function Solver() {
     setIsLoading(true)
 
     try {
-      const answer = await solve({ text, imageBase64, mediaType })
+      const answer = await solve({ text: apiText, imageBase64, mediaType })
       setMessages(prev => {
         const updated = [...prev]
         updated[updated.length - 1] = { role: 'assistant', text: answer }
@@ -127,9 +132,25 @@ export default function Solver() {
   }
 
   async function handleSubmit() {
+    if (isLoading) return
+
+    // 단원 예제 답 제출 모드
+    if (pendingProblem !== null) {
+      const userAnswer = input.trim()
+      const displayText = userAnswer || '풀이 보기'
+      const apiText = userAnswer
+        ? `[문제]\n${pendingProblem}\n\n[학생 답]\n${userAnswer}\n\n위 문제의 손풀이 풀이를 보여줘. 학생 답이 맞는지 첫 줄에 ✓ 또는 ✗로 표시하고, 틀렸으면 어느 부분이 다른지 짚어줘.`
+        : `[문제]\n${pendingProblem}\n\n위 문제의 손풀이 풀이를 보여줘.`
+
+      setPendingProblem(null)
+      setInput('')
+      await submitMessage(apiText, undefined, undefined, undefined, displayText)
+      return
+    }
+
+    // 일반 입력 모드
     const text = input.trim()
     if (!text && !imageFile) return
-    if (isLoading) return
 
     let imageBase64: string | undefined
     let mediaType: string | undefined
@@ -146,15 +167,76 @@ export default function Solver() {
     await submitMessage(text, imageBase64, mediaType, displayImageUrl)
   }
 
+  async function handleShowSolution() {
+    if (!pendingProblem || isLoading) return
+    const problem = pendingProblem
+    setPendingProblem(null)
+    setInput('')
+    await submitMessage(
+      `[문제]\n${problem}\n\n위 문제의 손풀이 풀이를 보여줘.`,
+      undefined, undefined, undefined,
+      '풀이 보기',
+    )
+  }
+
   async function handleDifficultySelect(unit: string, d: Difficulty) {
     setSelectedUnit(null)
-    const prompt = `[${unit}] 단원의 수능 ${d.label}(${d.desc}) 수준 예제 문제를 새로 하나 직접 만들고, 바로 이어서 손풀이 스타일로 풀어줘. 문제를 먼저 제시한 뒤 풀이를 보여줘.`
-    await submitMessage(prompt)
+    setShowUnitSelector(false)
+    setPendingProblem(null)
+
+    const requestLabel = `📚 ${unit} · ${d.label} 예제`
+    const generationPrompt =
+      `[지시] 아래 조건의 수능 확률과 통계 예제 문제를 하나 만들어줘.\n` +
+      `단원: ${unit}\n` +
+      `난이도: ${d.label}(${d.desc})\n\n` +
+      `[출력 규칙 - 반드시 지킬 것]\n` +
+      `- 문제 텍스트만 출력해.\n` +
+      `- 풀이, 정답, 풀이 전략, 연습문제는 절대 출력하지 마.\n` +
+      `- 문제 번호나 "문제:" 같은 접두어 없이 바로 문제 내용만.`
+
+    setMessages(prev => [
+      ...prev,
+      { role: 'user', text: requestLabel },
+      { role: 'assistant', text: '', isLoading: true, isProblem: true },
+    ])
+    setIsLoading(true)
+
+    try {
+      const problemText = await solve({ text: generationPrompt })
+      setMessages(prev => {
+        const updated = [...prev]
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          text: problemText,
+          isProblem: true,
+        }
+        return updated
+      })
+      setPendingProblem(problemText)
+    } catch (err) {
+      const errorMsg =
+        err instanceof Error ? err.message : '문제 생성 중 오류가 발생했습니다.'
+      setMessages(prev => {
+        const updated = [...prev]
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          text: `오류: ${errorMsg}`,
+        }
+        return updated
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   function handleToggleUnitSelector() {
     setShowUnitSelector(prev => !prev)
     setSelectedUnit(null)
+  }
+
+  function handleCancelProblem() {
+    setPendingProblem(null)
+    setInput('')
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -185,10 +267,7 @@ export default function Solver() {
       ) : (
         <>
           <div className="difficulty-header">
-            <button
-              className="back-btn"
-              onClick={() => setSelectedUnit(null)}
-            >
+            <button className="back-btn" onClick={() => setSelectedUnit(null)}>
               ← 단원
             </button>
             <span className="selected-unit-label">{selectedUnit}</span>
@@ -210,6 +289,8 @@ export default function Solver() {
       )}
     </div>
   )
+
+  const isAnswerMode = pendingProblem !== null
 
   return (
     <div className="solver">
@@ -241,6 +322,17 @@ export default function Solver() {
                 )}
                 {msg.text && <p className="message-text">{msg.text}</p>}
               </div>
+            ) : msg.isProblem ? (
+              <div className="message-content problem-content">
+                {msg.isLoading ? (
+                  <span className="loading-text">문제 생성 중...</span>
+                ) : (
+                  <>
+                    <span className="problem-badge">📝 문제</span>
+                    <p className="problem-text">{msg.text}</p>
+                  </>
+                )}
+              </div>
             ) : (
               <div className="message-content assistant-content">
                 {msg.isLoading ? (
@@ -260,6 +352,18 @@ export default function Solver() {
       )}
 
       <div className="input-area">
+        {isAnswerMode && (
+          <div className="pending-hint">
+            <span>✏️ 답을 입력하고 전송하세요</span>
+            <button
+              className="cancel-problem-btn"
+              onClick={handleCancelProblem}
+              aria-label="문제 취소"
+            >
+              취소
+            </button>
+          </div>
+        )}
         {imagePreviewUrl && (
           <div className="image-preview">
             <img src={imagePreviewUrl} alt="업로드 이미지 미리보기" />
@@ -277,33 +381,50 @@ export default function Solver() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="문제를 입력하세요 (Enter로 전송, Shift+Enter로 줄바꿈)"
+            placeholder={
+              isAnswerMode
+                ? '내 답 또는 풀이를 입력하세요...'
+                : '문제를 입력하세요 (Enter로 전송, Shift+Enter로 줄바꿈)'
+            }
             rows={3}
             disabled={isLoading}
           />
           <div className="input-actions">
-            <button
-              className={`unit-toggle-btn${showUnitSelector ? ' active' : ''}`}
-              onClick={handleToggleUnitSelector}
-              disabled={isLoading}
-              title="단원별 예제"
-              aria-label="단원별 예제"
-            >
-              📚
-            </button>
-            <button
-              className="image-upload-btn"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isLoading}
-              title="이미지 업로드"
-              aria-label="이미지 업로드"
-            >
-              📷
-            </button>
+            {isAnswerMode ? (
+              <button
+                className="show-solution-btn"
+                onClick={() => void handleShowSolution()}
+                disabled={isLoading}
+                title="풀이 바로 보기"
+              >
+                풀이<br />보기
+              </button>
+            ) : (
+              <>
+                <button
+                  className={`unit-toggle-btn${showUnitSelector ? ' active' : ''}`}
+                  onClick={handleToggleUnitSelector}
+                  disabled={isLoading}
+                  title="단원별 예제"
+                  aria-label="단원별 예제"
+                >
+                  📚
+                </button>
+                <button
+                  className="image-upload-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isLoading}
+                  title="이미지 업로드"
+                  aria-label="이미지 업로드"
+                >
+                  📷
+                </button>
+              </>
+            )}
             <button
               className="submit-btn"
               onClick={() => void handleSubmit()}
-              disabled={isLoading || (!input.trim() && !imageFile)}
+              disabled={isLoading || (!isAnswerMode && !input.trim() && !imageFile)}
             >
               전송
             </button>
