@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { solve } from '../api/solve'
 
+type AppView = 'home' | 'chat'
+type ChatMode = 'unit' | 'direct'
+
 interface Message {
   role: 'user' | 'assistant'
   text: string
@@ -47,6 +50,8 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 export default function Solver() {
+  const [view, setView] = useState<AppView>('home')
+  const [chatMode, setChatMode] = useState<ChatMode>('direct')
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [imageFile, setImageFile] = useState<File | null>(null)
@@ -62,6 +67,23 @@ export default function Solver() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  function goHome() {
+    if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl)
+    setView('home')
+    setMessages([])
+    setPendingProblem(null)
+    setSelectedUnit(null)
+    setShowUnitSelector(false)
+    setInput('')
+    setImageFile(null)
+    setImagePreviewUrl(null)
+  }
+
+  function startMode(mode: ChatMode) {
+    setChatMode(mode)
+    setView('chat')
+  }
 
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -82,8 +104,6 @@ export default function Solver() {
     setImagePreviewUrl(null)
   }
 
-  // apiText: API로 전송되는 실제 텍스트
-  // displayText: 채팅 버블에 표시할 텍스트 (생략 시 apiText 사용)
   async function submitMessage(
     apiText: string,
     imageBase64?: string,
@@ -134,7 +154,6 @@ export default function Solver() {
   async function handleSubmit() {
     if (isLoading) return
 
-    // 단원 예제 답 제출 모드
     if (pendingProblem !== null) {
       const userAnswer = input.trim()
       const displayText = userAnswer || '풀이 보기'
@@ -148,7 +167,6 @@ export default function Solver() {
       return
     }
 
-    // 일반 입력 모드
     const text = input.trim()
     if (!text && !imageFile) return
 
@@ -292,21 +310,71 @@ export default function Solver() {
 
   const isAnswerMode = pendingProblem !== null
 
+  // ── Home screen ──────────────────────────────────────────
+  if (view === 'home') {
+    return (
+      <div className="solver">
+        <header className="solver-header">
+          <h1>확률과 통계 손풀이</h1>
+          <p>시작할 방식을 선택하세요</p>
+        </header>
+        <div className="home-screen">
+          <button
+            className="mode-card"
+            onClick={() => startMode('unit')}
+          >
+            <span className="mode-icon">📚</span>
+            <span className="mode-title">단원별 예제 풀기</span>
+            <span className="mode-desc">
+              단원과 난이도를 선택하면<br />
+              예제 문제를 출제해드려요
+            </span>
+          </button>
+          <button
+            className="mode-card"
+            onClick={() => startMode('direct')}
+          >
+            <span className="mode-icon">✏️</span>
+            <span className="mode-title">직접 입력</span>
+            <span className="mode-desc">
+              문제를 직접 타이핑하거나<br />
+              이미지를 올려주세요
+            </span>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Chat screen ───────────────────────────────────────────
   return (
     <div className="solver">
       <header className="solver-header">
+        <button className="home-btn" onClick={goHome}>← 처음으로</button>
         <h1>확률과 통계 손풀이</h1>
-        <p>문제를 입력하거나 이미지를 올리면 시험장 스타일로 풀어드립니다</p>
+        <p>
+          {chatMode === 'unit'
+            ? '단원별 예제 풀기'
+            : '문제를 입력하거나 이미지를 올려주세요'}
+        </p>
       </header>
 
       <div className="messages">
         {messages.length === 0 && (
           <div className="empty-state">
-            <p className="empty-title">어떤 문제를 풀어드릴까요?</p>
-            <p className="empty-subtitle">
-              단원을 선택하거나 문제를 직접 입력하세요
-            </p>
-            {unitSelectorContent}
+            {chatMode === 'unit' ? (
+              <>
+                <p className="empty-title">단원과 난이도를 선택하세요</p>
+                {unitSelectorContent}
+              </>
+            ) : (
+              <>
+                <p className="empty-title">어떤 문제를 풀어드릴까요?</p>
+                <p className="empty-subtitle">
+                  문제를 직접 입력하거나 이미지를 올려주세요
+                </p>
+              </>
+            )}
           </div>
         )}
         {messages.map((msg, i) => (
@@ -424,7 +492,9 @@ export default function Solver() {
             <button
               className="submit-btn"
               onClick={() => void handleSubmit()}
-              disabled={isLoading || (!isAnswerMode && !input.trim() && !imageFile)}
+              disabled={
+                isLoading || (!isAnswerMode && !input.trim() && !imageFile)
+              }
             >
               전송
             </button>
